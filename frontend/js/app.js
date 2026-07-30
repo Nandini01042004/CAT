@@ -1,12 +1,10 @@
 /* ─── CAT Smart Rental — Full Application ─── */
-const API = "http://localhost:8000";
+const API = "";
 
 // ─── State ───
 let state = {
-    stats: null,
     equipmentPage: 1,
     equipments: [],
-    anomalyCount: 0,
 };
 
 // ─── Toast ───
@@ -40,7 +38,15 @@ function fmtNum(n) {
 }
 function fmtMoney(n) {
     if (n === null || n === undefined) return "—";
-    return "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+function fmtDate(d) {
+    if (!d) return "—";
+    return new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+}
+function fmtDateTime(d) {
+    if (!d) return "—";
+    return new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 // ─── API helpers ───
@@ -59,26 +65,54 @@ async function apiPost(path, body) {
     return res.json();
 }
 
+// ─── Status from row ───
+function eqStatus(eq) {
+    if (eq.check_out_time && new Date(eq.check_out_time) < new Date()) return "overdue";
+    if (eq.check_in_time && !eq.check_out_time) return "in_use";
+    if (eq.check_in_time && eq.check_out_time) return "free";
+    return "available";
+}
+function eqStatusBadge(eq) {
+    const s = eqStatus(eq);
+    const map = { in_use: "✅ In Use", free: "🟢 Free", overdue: "🔴 Overdue", available: "⚪ Available" };
+    return `<span class="status-badge-tag ${s}">${map[s] || s}</span>`;
+}
+function eqDaysOverdue(eq) {
+    if (eq.check_out_time && new Date(eq.check_out_time) < new Date()) {
+        const diff = Math.ceil((new Date() - new Date(eq.check_out_time)) / (1000 * 60 * 60 * 24));
+        return diff;
+    }
+    return null;
+}
+
 // ─── Dashboard ───
 async function loadDashboard() {
     try {
         const d = await apiGet("/api/dashboard/stats");
-        state.stats = d.data;
-        document.getElementById("statTotal").textContent = d.data.total;
-        document.getElementById("statActive").textContent = d.data.checked_in;
-        document.getElementById("statOverdue").textContent = d.data.overdue;
-        document.getElementById("statEngine").textContent = fmtNum(d.data.total_engine_hours) + "h";
-        document.getElementById("statIdle").textContent = fmtNum(d.data.total_idle_hours) + "h";
-        document.getElementById("statFuel").textContent = fmtNum(d.data.total_fuel_used) + "L";
-        document.getElementById("statCost").textContent = fmtMoney(d.data.total_rental_cost);
-        document.getElementById("alertBadge").textContent = d.data.overdue;
+        document.getElementById("statTotal").textContent = d.total;
+        document.getElementById("statActive").textContent = d.in_use;
+        document.getElementById("statOverdue").textContent = d.overdue;
+        document.getElementById("statEngine").textContent = fmtNum(d.total_engine_hours) + "h";
+        document.getElementById("statIdle").textContent = fmtNum(d.total_idle_hours) + "h";
+        document.getElementById("alertBadge").textContent = d.overdue;
+
+        // Last locations
+        const locEl = document.getElementById("lastLocations");
+        if (d.last_locations && d.last_locations.length) {
+            locEl.innerHTML = d.last_locations.map(l => `
+                <div style="display:flex;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid var(--cat-border);font-size:.85rem">
+                    <span><strong>${l.equipment_id}</strong> — ${l.equipment_type}</span>
+                    <span style="color:var(--cat-text-muted)">${l.site_id || "—"} · ${l.last_operator_id || "—"}</span>
+                </div>
+            `).join("");
+        } else { locEl.innerHTML = "<span style='color:var(--cat-text-muted)'>No active equipment</span>"; }
 
         // Charts
-        if (d.data.by_type && d.data.by_type.length) {
-            renderPie("chartByType", d.data.by_type, "equipment_type", "count", "Equipment by Type");
+        if (d.by_type && d.by_type.length) {
+            renderPie("chartByType", d.by_type, "equipment_type", "cnt", "Equipment by Type");
         }
-        if (d.data.by_site && d.data.by_site.length) {
-            renderBar("chartBySite", d.data.by_site, "site_id", "count", "Distribution by Site");
+        if (d.by_site && d.by_site.length) {
+            renderBar("chartBySite", d.by_site, "site_id", "cnt", "Distribution by Site");
         }
     } catch (e) {
         console.error("Dashboard:", e);
@@ -127,56 +161,13 @@ function renderBar(canvasId, data, labelKey, valueKey, title) {
         },
         options: {
             responsive: true,
-            plugins: {
-                legend: { display: false },
-            },
+            plugins: { legend: { display: false } },
             scales: {
                 x: { ticks: { color: "#9ca3af" }, grid: { color: "#2d2d2d" } },
                 y: { ticks: { color: "#9ca3af", precision: 0 }, grid: { color: "#2d2d2d" } },
             }
         }
     });
-}
-
-// ─── Chatbot ───
-async function sendChat() {
-    const input = document.getElementById("chatInput");
-    const q = input.value.trim();
-    if (!q) return;
-    const msgs = document.getElementById("chatMessages");
-    msgs.innerHTML += `<div class="chat-msg user"><div class="chat-bubble">${escapeHtml(q)}</div></div>`;
-    input.value = "";
-    msgs.innerHTML += `<div class="chat-msg bot"><div class="chat-bubble loading">Thinking...</div></div>`;
-    msgs.scrollTop = msgs.scrollHeight;
-
-    try {
-        const res = await apiGet("/api/chat?q=" + encodeURIComponent(q));
-        msgs.querySelector(".chat-msg.bot:last-child").remove();
-        let html = `<div class="chat-msg bot"><div class="chat-bubble">${escapeHtml(res.answer)}</div></div>`;
-        if (res.data && res.data.length) {
-            const sample = res.data.slice(0, 5);
-            html += `<div class="chat-msg bot"><div class="chat-bubble" style="font-size:.75rem;background:var(--cat-dark);">`;
-            sample.forEach(r => {
-                html += `<div>${Object.entries(r).map(([k,v]) => `<b>${k}:</b> ${v ?? "—"}`).join(" | ")}</div>`;
-            });
-            if (res.data.length > 5) html += `<div style="margin-top:4px;color:var(--cat-text-muted);">… and ${res.data.length - 5} more</div>`;
-            html += `</div></div>`;
-        }
-        msgs.innerHTML += html;
-    } catch (e) {
-        msgs.querySelector(".chat-msg.bot:last-child").remove();
-        msgs.innerHTML += `<div class="chat-msg bot"><div class="chat-bubble" style="color:var(--red);">Error: ${e.message}</div></div>`;
-    }
-    msgs.scrollTop = msgs.scrollHeight;
-}
-
-document.getElementById("chatSend").addEventListener("click", sendChat);
-document.getElementById("chatInput").addEventListener("keydown", e => { if (e.key === "Enter") sendChat(); });
-
-function escapeHtml(s) {
-    const d = document.createElement("div");
-    d.textContent = s;
-    return d.innerHTML;
 }
 
 // ─── Equipment List ───
@@ -191,10 +182,11 @@ async function loadEquipment(page = 1) {
         if (site) path += `&site=${encodeURIComponent(site)}`;
         const res = await apiGet(path);
         state.equipments = res.data;
+        state.equipmentPage = page;
 
         const tbody = document.querySelector("#equipmentTable tbody");
         if (!res.data.length) {
-            tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--cat-text-muted);">No equipment found</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--cat-text-muted);">No equipment found</td></tr>`;
             return;
         }
         tbody.innerHTML = res.data.map(eq => `
@@ -202,18 +194,18 @@ async function loadEquipment(page = 1) {
                 <td><strong>${eq.equipment_id}</strong></td>
                 <td>${eq.equipment_type}</td>
                 <td>${eq.site_id || "—"}</td>
-                <td>${eq.operator_id || "—"}</td>
-                <td><span class="status-badge-tag ${eq.status}">${eq.status.replace("_", " ")}</span></td>
-                <td>${fmtNum(eq.engine_hours)}</td>
-                <td>${fmtNum(eq.idle_hours)}</td>
-                <td>${fmtNum(eq.fuel_used)}L</td>
-                <td>${fmtMoney(eq.rental_cost)}</td>
+                <td>${fmtDate(eq.check_in_time)}</td>
+                <td>${fmtDate(eq.check_out_time)}</td>
+                <td>${fmtNum(eq.engine_hours_per_day)}h</td>
+                <td>${fmtNum(eq.idle_hours_per_day)}h</td>
+                <td>${eq.rental_days || "—"}</td>
+                <td>${eq.last_operator_id || "—"}</td>
+                <td>${eqStatusBadge(eq)}</td>
             </tr>
         `).join("");
 
         const total = res.total || 0;
         const pages = Math.ceil(total / 20);
-        state.equipmentPage = page;
         const pg = document.getElementById("equipmentPagination");
         pg.innerHTML = "";
         if (pages > 1) {
@@ -230,8 +222,8 @@ async function loadEquipment(page = 1) {
 async function loadFilters() {
     try {
         const d = await apiGet("/api/dashboard/stats");
-        const types = d.data.by_type || [];
-        const sites = d.data.by_site || [];
+        const types = d.by_type || [];
+        const sites = d.by_site || [];
         const typeSel = document.getElementById("filterType");
         types.forEach(t => {
             typeSel.innerHTML += `<option value="${t.equipment_type}">${t.equipment_type}</option>`;
@@ -253,23 +245,24 @@ async function loadAlerts() {
             banner.style.background = "rgba(34,197,94,.1)";
             banner.style.borderColor = "rgba(34,197,94,.3)";
         } else {
-            banner.textContent = `⚠️ ${res.overdue_count} equipment overdue! Total rental cost at risk. Review below.`;
+            banner.textContent = `⚠️ ${res.overdue_count} equipment overdue! Review below.`;
         }
         const tbody = document.querySelector("#alertTable tbody");
         if (!res.overdue.length) {
-            tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--cat-text-muted);">No overdue equipment</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--cat-text-muted);">No overdue equipment</td></tr>`;
             return;
         }
-        tbody.innerHTML = res.overdue.map(eq => `
+        tbody.innerHTML = res.overdue.map(eq => {
+            const days = eqDaysOverdue(eq);
+            return `
             <tr>
                 <td><strong>${eq.equipment_id}</strong></td>
                 <td>${eq.equipment_type}</td>
                 <td>${eq.site_id || "—"}</td>
-                <td>${eq.operator_id || "—"}</td>
-                <td>${fmtMoney(eq.rental_cost)}</td>
-                <td><span style="color:var(--red);">⚠️ Overdue</span></td>
-            </tr>
-        `).join("");
+                <td>${eq.last_operator_id || "—"}</td>
+                <td><span style="color:var(--red);">⚠️ ${days} days overdue</span></td>
+            </tr>`;
+        }).join("");
     } catch (e) { console.error("Alerts:", e); }
 }
 
@@ -278,9 +271,11 @@ document.getElementById("checkinForm").addEventListener("submit", async e => {
     e.preventDefault();
     try {
         const body = {
+            customer_id: document.getElementById("cinCustId").value || "CUST-001",
             site_id: document.getElementById("cinSiteId").value,
             operator_id: document.getElementById("cinOperatorId").value,
-            daily_rental_rate: parseFloat(document.getElementById("cinRate").value) || 500,
+            daily_rate: parseFloat(document.getElementById("cinRate").value) || 500,
+            rental_days: parseInt(document.getElementById("cinRentalDays").value) || 30,
         };
         const res = await apiPost("/api/equipment/" + document.getElementById("cinEquipId").value + "/checkin", body);
         toast(res.message);
@@ -303,14 +298,15 @@ async function loadRecentCheckins() {
     try {
         const res = await apiGet("/api/alerts");
         const el = document.getElementById("recentCheckins");
-        if (!res.latest_checkins || !res.latest_checkins.length) {
-            el.innerHTML = "No recent check-ins.";
+        const inUse = res.in_use || [];
+        if (!inUse.length) {
+            el.innerHTML = "No equipment currently checked in.";
             return;
         }
-        el.innerHTML = res.latest_checkins.slice(0, 5).map(eq => `
+        el.innerHTML = inUse.slice(0, 10).map(eq => `
             <div style="padding:.5rem 0;border-bottom:1px solid var(--cat-border);display:flex;justify-content:space-between;font-size:.85rem;">
                 <span><strong>${eq.equipment_id}</strong> (${eq.equipment_type})</span>
-                <span style="color:var(--cat-text-muted);">${eq.site_id} · ${eq.operator_id || "—"}</span>
+                <span style="color:var(--cat-text-muted);">${eq.site_id} · ${eq.operator_id || "—"} · Since ${fmtDate(eq.check_in_time)}</span>
             </div>
         `).join("");
     } catch (e) { console.error(e); }
@@ -335,12 +331,12 @@ document.getElementById("loadUsageBtn").addEventListener("click", async () => {
         const logs = res.data || [];
         const tbody = document.querySelector("#usageTable tbody");
         if (!logs.length) {
-            tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--cat-text-muted);">No usage logs</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--cat-text-muted);">No usage logs for this equipment</td></tr>`;
             return;
         }
         tbody.innerHTML = logs.map(log => `
             <tr>
-                <td>${new Date(log.date).toLocaleDateString()}</td>
+                <td>${fmtDate(log.log_date)}</td>
                 <td>${fmtNum(log.engine_hours)}h</td>
                 <td>${fmtNum(log.idle_hours)}h</td>
                 <td>${fmtNum(log.fuel_used)}L</td>
@@ -352,14 +348,15 @@ document.getElementById("loadUsageBtn").addEventListener("click", async () => {
         // Chart
         const ctx = document.getElementById("usageChart");
         if (chartInstances["usageChart"]) chartInstances["usageChart"].destroy();
+        const reversed = [...logs].reverse();
         chartInstances["usageChart"] = new Chart(ctx, {
             type: "line",
             data: {
-                labels: logs.map(l => new Date(l.date).toLocaleDateString()).reverse(),
+                labels: reversed.map(l => fmtDate(l.log_date)),
                 datasets: [
-                    { label: "Engine Hours", data: logs.map(l => l.engine_hours).reverse(), borderColor: "#FFCC00", backgroundColor: "transparent", tension: .3, pointRadius: 3 },
-                    { label: "Idle Hours", data: logs.map(l => l.idle_hours).reverse(), borderColor: "#f97316", backgroundColor: "transparent", tension: .3, pointRadius: 3 },
-                    { label: "Fuel (L)", data: logs.map(l => l.fuel_used).reverse(), borderColor: "#3b82f6", backgroundColor: "transparent", tension: .3, pointRadius: 3, yAxisID: "y1" },
+                    { label: "Engine Hours", data: reversed.map(l => l.engine_hours), borderColor: "#FFCC00", backgroundColor: "transparent", tension: .3, pointRadius: 3 },
+                    { label: "Idle Hours", data: reversed.map(l => l.idle_hours), borderColor: "#f97316", backgroundColor: "transparent", tension: .3, pointRadius: 3 },
+                    { label: "Fuel (L)", data: reversed.map(l => l.fuel_used), borderColor: "#3b82f6", backgroundColor: "transparent", tension: .3, pointRadius: 3, yAxisID: "y1" },
                 ]
             },
             options: {
@@ -391,17 +388,17 @@ async function loadForecast() {
                 <td>${p.equipment_type}</td>
                 <td>${p.site_id}</td>
                 <td>${p.cnt}</td>
-                <td><strong>${p.forecast_needed}</strong></td>
-                <td><span style="color:var(--cat-yellow);">${p.next_week_demand}</span></td>
+                <td><strong>${p.forecast}</strong></td>
+                <td><span style="color:var(--cat-yellow);">${p.next_week}</span></td>
             </tr>
         `).join("");
 
-        // Group by type for chart
+        // Chart
         const byType = {};
         preds.forEach(p => {
             if (!byType[p.equipment_type]) byType[p.equipment_type] = { current: 0, forecast: 0 };
             byType[p.equipment_type].current += p.cnt;
-            byType[p.equipment_type].forecast += p.forecast_needed;
+            byType[p.equipment_type].forecast += p.forecast;
         });
         const labels = Object.keys(byType);
         const ctx = document.getElementById("forecastChart");
@@ -411,8 +408,8 @@ async function loadForecast() {
             data: {
                 labels,
                 datasets: [
-                    { label: "Current", data: labels.map(l => byType[l].current), backgroundColor: "#6b7280", borderRadius: 4 },
-                    { label: "Forecast", data: labels.map(l => byType[l].forecast), backgroundColor: "#FFCC00", borderRadius: 4 },
+                    { label: "Current Active", data: labels.map(l => byType[l].current), backgroundColor: "#6b7280", borderRadius: 4 },
+                    { label: "Forecast Needed", data: labels.map(l => byType[l].forecast), backgroundColor: "#FFCC00", borderRadius: 4 },
                 ]
             },
             options: {
@@ -431,7 +428,6 @@ async function loadForecast() {
 async function loadAnomalies() {
     try {
         const res = await apiGet("/api/anomalies");
-        state.anomalyCount = res.count;
         const tbody = document.querySelector("#anomalyTable tbody");
         const statsEl = document.getElementById("anomalyStats");
 
@@ -451,9 +447,9 @@ async function loadAnomalies() {
         tbody.innerHTML = res.data.map(a => `
             <tr>
                 <td><strong>${a.equipment_id}</strong></td>
-                <td>${a.type}</td>
+                <td>${a.equipment_type}</td>
                 <td>${a.site_id || "—"}</td>
-                <td>${a.operator_id || "—"}</td>
+                <td>${a.last_operator_id || "—"}</td>
                 <td><span class="severity-${a.severity}">${a.severity}</span></td>
                 <td style="font-size:.8rem;">${a.anomalies.join("; ")}</td>
             </tr>
@@ -464,13 +460,10 @@ async function loadAnomalies() {
 // ─── Global search ───
 document.getElementById("globalSearch").addEventListener("keydown", async e => {
     if (e.key === "Enter" && e.target.value.trim()) {
-        const q = e.target.value.trim();
-        // Navigate to equipment view
         document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
         document.querySelector('[data-view="equipment"]').classList.add("active");
         document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
         document.getElementById("view-equipment").classList.add("active");
-        // Filter by ID search
         loadEquipment(1);
     }
 });
