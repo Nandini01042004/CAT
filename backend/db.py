@@ -1,16 +1,19 @@
-"""Direct psycopg2 connection (matching the dummy code pattern)"""
+"""Single persistent connection for Neon (19s cold start paid once at startup)"""
 import psycopg2
 import psycopg2.extras
 
-CONN_STRING = "postgresql://neondb_owner:npg_5mxl1ASwDVvb@ep-wispy-cake-ax2q5ud6-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require"
+CONN_STRING = "postgresql://neondb_owner:npg_5mxl1ASwDVvb@ep-wispy-cake-ax2q5ud6.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require&connect_timeout=10"
 
+_conn = None
 
-def get_conn():
-    return psycopg2.connect(CONN_STRING)
-
+def _get_conn():
+    global _conn
+    if _conn is None or _conn.closed:
+        _conn = psycopg2.connect(CONN_STRING)
+    return _conn
 
 def query(sql, params=None, fetch=True):
-    conn = get_conn()
+    conn = _get_conn()
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(sql, params)
@@ -22,12 +25,9 @@ def query(sql, params=None, fetch=True):
     except Exception as e:
         conn.rollback()
         raise e
-    finally:
-        conn.close()
-
 
 def execute(sql, params=None):
-    conn = get_conn()
+    conn = _get_conn()
     try:
         cur = conn.cursor()
         cur.execute(sql, params)
@@ -36,5 +36,3 @@ def execute(sql, params=None):
     except Exception as e:
         conn.rollback()
         raise e
-    finally:
-        conn.close()
