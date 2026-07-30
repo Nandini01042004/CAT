@@ -219,41 +219,13 @@ def alerts():
 
 @app.get("/api/forecast")
 def forecast():
-    # Top customers by rentals
-    top_customers = query("""
-        SELECT customer_id, COUNT(*) as cnt
-        FROM rental_history GROUP BY customer_id
-        ORDER BY cnt DESC LIMIT 10
-    """)
-    # Equipment needed by site
-    site_demand = query("""
-        SELECT rh.site_id, e.equipment_type, COUNT(*) as cnt
-        FROM rental_history rh JOIN equipment e ON rh.equipment_id = e.equipment_id
-        WHERE rh.status='active'
-        GROUP BY rh.site_id, e.equipment_type
-        ORDER BY cnt DESC
-    """)
-    # Repeat customer predictions
-    repeat = query("""
-        SELECT customer_id, COUNT(*) as rentals
-        FROM rental_history GROUP BY customer_id
-        HAVING COUNT(*) > 3
-        ORDER BY rentals DESC
-    """)
-    # Demand forecast
-    predictions = []
-    for row in site_demand:
-        p = dict(row)
-        p["forecast"] = max(1, int(row["cnt"] * (0.8 + 0.4 * random.random())))
-        p["next_week"] = f"{p['forecast']}+ units"
-        predictions.append(p)
-
-    return {
-        "predictions": predictions,
-        "top_customers": top_customers,
-        "repeat_customers": repeat,
-        "site_demand": site_demand,
-    }
+    try:
+        from forecast import generate_forecast
+        preds = generate_forecast(days_ahead=14)
+        return {"predictions": preds, "model": "xgboost"}
+    except Exception as e:
+        print(f"Forecast error: {e}")
+        return {"predictions": [], "model": "xgboost", "error": str(e)}
 
 # ─── Anomaly Detection ────────────────────────────────────────────────────
 

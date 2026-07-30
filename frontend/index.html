@@ -291,14 +291,21 @@
                         <canvas id="forecastChart"></canvas>
                     </div>
                 </div>
-                <div class="table-wrapper">
-                    <table class="data-table" id="forecastTable">
-                        <thead>
-                            <tr><th>Type</th><th>Site</th><th>Current</th><th>Forecast Needed</th><th>Next Week</th></tr>
-                        </thead>
-                        <tbody></tbody>
-                    </table>
                 </div>
+
+                <div class="forecast-insights-wrapper">
+                    <h3 class="insights-title">Predictions (Aug 16 - Aug 29)</h3>
+                    <div class="ranked-table-wrapper">
+                        <table class="data-table" id="rankedForecastTable">
+                            <thead>
+                                <tr><th>Rank</th><th>Type</th><th>Daily Demand</th><th>Trend</th><th>Status</th></tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <div class="suggestions-section" id="forecastSuggestions"></div>
+                </div>
+            </section>
             </section>
 
             <!-- Anomalies -->
