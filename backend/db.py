@@ -1,4 +1,4 @@
-"""Single persistent connection for Neon (19s cold start paid once at startup)"""
+"""Single persistent connection for Neon (20s cold start paid once at startup)"""
 import psycopg2
 import psycopg2.extras
 
@@ -8,9 +8,13 @@ _conn = None
 
 def _get_conn():
     global _conn
-    if _conn is None or _conn.closed:
+    try:
+        if _conn is None or _conn.closed:
+            _conn = psycopg2.connect(CONN_STRING)
+        return _conn
+    except:
         _conn = psycopg2.connect(CONN_STRING)
-    return _conn
+        return _conn
 
 def query(sql, params=None, fetch=True):
     conn = _get_conn()
